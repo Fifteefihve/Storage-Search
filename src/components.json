@@ -1,0 +1,17 @@
+{
+  "cpu": {
+    "brand": "Intel",
+    "model": "Core i5-12400f",
+    "cores": 6,
+    "Ghz": 2.5
+  },
+  "ram": {
+    "GB": 16,
+    "type": "DDR4"
+  },
+  "gpu": {
+    "brand": "NVIDIA",
+    "model": "GTX 1660 Super",
+    "vram": 6
+  }
+}

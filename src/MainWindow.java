@@ -1,18 +1,365 @@
 import javax.swing.*;
+import javax.swing.tree.*;
+import javax.swing.event.*;
+import javax.swing.border.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.*;
+import java.io.*;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-public class MainWindow {
-    private JFrame frame1;
+/**
+ * Expected Excel format — one sheet per component category (e.g. "cpu", "motherboard", ...):
+ * Row 1  -> Header row  (field names: Brand, Model, Socket, ...)
+ * Row 2+ -> Data rows   (one row per part)
+ */
+public class MainWindow extends JFrame {
+
+    private static final Color BG_DARK = new Color(80, 80, 80);
+    private static final Color BG_PANEL = new Color(70, 70, 70);
+    private static final Color BG_BOTTOM = new Color(55, 55, 55);
+    private static final Color COL_LABEL = new Color(180, 130, 200);
+    private static final Color COL_VALUE = new Color(80, 210, 180);
+    private static final Color COL_ADD = new Color(80, 210, 80);
+    private static final Color COL_RELOAD = new Color(210, 200, 80);
+    private static final Color COL_STATS = new Color(200, 200, 200);
+    private static final Color COL_TREE = new Color(220, 220, 220);
+    private static final String DEFAULT_EXCEL = "components.xlsx";
+
+    private final Map<String, java.util.List<Map<String, String>>> data = new LinkedHashMap<>();
+
+    private DefaultTreeModel treeModel;
+    private DefaultMutableTreeNode rootNode;
+    private JTree tree;
+    private JPanel fieldsPanel;
+    private JLabel titleLabel;
+    private JLabel statsLabel;
+    private final String excelPath;
     private JPanel panel1;
-    private JTree ComponentsList;
 
-    public void MainSearch() {
+    public MainWindow(String excelPath) {
+        this.excelPath = excelPath;
+        loadFromExcel();
+        buildUI();
+    }
 
-        JFrame frame1 = new JFrame();
-        frame1.setResizable(false);
-        frame1.setSize(1920, 1080);
-        //frame1.setLayout(null);
-        frame1.setVisible(true);
-        frame1.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        frame1.add(ComponentsList);
+    private void loadFromExcel() {
+        data.clear();
+        File file = new File(excelPath);
+
+        if (!file.exists()) {
+            JOptionPane.showMessageDialog(null,
+                    "Excel file not found:\n" + file.getAbsolutePath()
+                            + "\n\nStarting empty. Use 'add +' to add entries manually,\n"
+                            + "or place your components.xlsx at the above path and click reload.",
+                    "File Not Found", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        try (FileInputStream fis = new FileInputStream(file);
+             Workbook workbook = new XSSFWorkbook(fis)) {
+
+            DataFormatter formatter = new DataFormatter();
+
+            for (int si = 0; si < workbook.getNumberOfSheets(); si++) {
+                Sheet sheet = workbook.getSheetAt(si);
+                String category = sheet.getSheetName().toLowerCase().trim();
+
+                // Find header row (row 0)
+                Row headerRow = sheet.getRow(0);
+                if (headerRow == null) continue;
+
+                java.util.List<String> headers = new ArrayList<>();
+                for (Cell cell : headerRow) {
+                    String h = formatter.formatCellValue(cell).trim();
+                    headers.add(h.isEmpty() ? "Col" + (cell.getColumnIndex() + 1) : h);
+                }
+                if (headers.isEmpty()) continue;
+
+                java.util.List<Map<String, String>> parts = new ArrayList<>();
+                for (int r = 1; r <= sheet.getLastRowNum(); r++) {
+                    Row row = sheet.getRow(r);
+                    if (row == null) continue;
+
+                    Map<String, String> part = new LinkedHashMap<>();
+                    boolean hasContent = false;
+                    for (int c = 0; c < headers.size(); c++) {
+                        Cell cell = row.getCell(c, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
+                        String val = cell != null ? formatter.formatCellValue(cell).trim() : "";
+                        if (!val.isEmpty()) hasContent = true;
+                        part.put(headers.get(c), val);
+                    }
+                    if (hasContent) parts.add(part);
+                }
+
+                if (!parts.isEmpty()) data.put(category, parts);
+            }
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(null,
+                    "Could not read Excel file:\n" + ex.getMessage(),
+                    "Load Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void buildUI() {
+        setTitle("Inventory Search");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setSize(1064, 1069);
+        setLocationRelativeTo(null);
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(BG_DARK);
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                buildTreePanel(), buildDetailPanel());
+        split.setDividerLocation(520);
+        split.setDividerSize(4);
+        split.setBorder(null);
+
+        root.add(split, BorderLayout.CENTER);
+        root.add(buildStatsPanel(), BorderLayout.SOUTH);
+        setContentPane(root);
+        updateStats();
+    }
+
+    private JPanel buildTreePanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(BG_PANEL);
+
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 6));
+        bar.setBackground(BG_PANEL);
+
+        JButton reloadBtn = styledBtn("↺ reload", COL_RELOAD, 15);
+        reloadBtn.addActionListener(e -> onReload());
+        bar.add(reloadBtn);
+
+        JButton addBtn = styledBtn("add  +", COL_ADD, 18);
+        addBtn.addActionListener(e -> onAdd());
+        bar.add(addBtn);
+
+        panel.add(bar, BorderLayout.NORTH);
+
+        rootNode = new DefaultMutableTreeNode("Components");
+        treeModel = new DefaultTreeModel(rootNode);
+        rebuildNodes();
+
+        tree = new JTree(treeModel);
+        tree.setBackground(BG_PANEL);
+        tree.setFont(new Font("SansSerif", Font.PLAIN, 16));
+        tree.setBorder(new EmptyBorder(4, 8, 4, 4));
+        tree.setRowHeight(28);
+        tree.setRootVisible(true);
+        tree.setShowsRootHandles(true);
+
+        tree.setCellRenderer(new DefaultTreeCellRenderer() {{
+            setBackgroundNonSelectionColor(BG_PANEL);
+            setBackgroundSelectionColor(new Color(60, 60, 90));
+            setTextNonSelectionColor(COL_TREE);
+            setTextSelectionColor(Color.WHITE);
+            setBorderSelectionColor(new Color(60, 60, 90));
+        }});
+
+        tree.addTreeSelectionListener(this::onSelect);
+
+        JScrollPane scroll = new JScrollPane(tree);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(BG_PANEL);
+        panel.add(scroll, BorderLayout.CENTER);
+
+        for (int i = 0; i < tree.getRowCount(); i++) tree.expandRow(i);
+
+        return panel;
+    }
+
+    private JPanel buildDetailPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(BG_DARK);
+        panel.setBorder(new EmptyBorder(30, 40, 30, 40));
+
+        titleLabel = new JLabel("Select a component", SwingConstants.CENTER);
+        titleLabel.setFont(new Font("SansSerif", Font.PLAIN, 26));
+        titleLabel.setForeground(COL_TREE);
+        panel.add(titleLabel, BorderLayout.NORTH);
+
+        fieldsPanel = new JPanel();
+        fieldsPanel.setBackground(BG_DARK);
+        fieldsPanel.setLayout(new BoxLayout(fieldsPanel, BoxLayout.Y_AXIS));
+
+        JScrollPane scroll = new JScrollPane(fieldsPanel);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(BG_DARK);
+        panel.add(scroll, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel buildStatsPanel() {
+        JPanel panel = new JPanel();
+        panel.setBackground(BG_BOTTOM);
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(10, 14, 10, 14));
+
+        JLabel h = new JLabel("stats");
+        h.setFont(new Font("SansSerif", Font.PLAIN, 18));
+        h.setForeground(COL_STATS);
+        panel.add(h);
+
+        statsLabel = new JLabel();
+        statsLabel.setFont(new Font("SansSerif", Font.PLAIN, 16));
+        statsLabel.setForeground(COL_STATS);
+        panel.add(statsLabel);
+        return panel;
+    }
+
+    private void rebuildNodes() {
+        rootNode.removeAllChildren();
+        for (Map.Entry<String, java.util.List<Map<String, String>>> e : data.entrySet()) {
+            DefaultMutableTreeNode cat = new DefaultMutableTreeNode(e.getKey());
+            for (Map<String, String> part : e.getValue())
+                cat.add(new DefaultMutableTreeNode(label(part)));
+            rootNode.add(cat);
+        }
+        if (treeModel != null && tree != null) {
+            treeModel.reload();
+            for (int i = 0; i < tree.getRowCount(); i++) tree.expandRow(i);
+        }
+    }
+
+    private DefaultMutableTreeNode findCatNode(String category) {
+        for (int i = 0; i < rootNode.getChildCount(); i++) {
+            DefaultMutableTreeNode n = (DefaultMutableTreeNode) rootNode.getChildAt(i);
+            if (n.toString().equals(category)) return n;
+        }
+        return null;
+    }
+
+    private void onSelect(TreeSelectionEvent e) {
+        TreePath path = e.getPath();
+        if (path == null) return;
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+
+        if (node.isRoot()) {
+            clearDetail("Components");
+            return;
+        }
+
+        DefaultMutableTreeNode parent = (DefaultMutableTreeNode) node.getParent();
+        if (parent == null || parent.isRoot()) {
+            clearDetail(node.toString());
+            return;
+        }
+
+        String category = parent.toString();
+        int idx = parent.getIndex(node);
+        java.util.List<Map<String, String>> parts = data.get(category);
+        if (parts != null && idx < parts.size()) showDetail(parts.get(idx));
+    }
+
+    private void onReload() {
+        loadFromExcel();
+        rebuildNodes();
+        clearDetail("Select a component");
+        updateStats();
+    }
+
+    private void onAdd() {
+        if (data.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "No categories found. Check your Excel file has at least one sheet with data.");
+            return;
+        }
+        String[] cats = data.keySet().toArray(new String[0]);
+        String cat = (String) JOptionPane.showInputDialog(this,
+                "Select category:", "Add Component",
+                JOptionPane.PLAIN_MESSAGE, null, cats, cats[0]);
+        if (cat == null) return;
+
+        JTextField brand = new JTextField(15), model = new JTextField(15);
+        JPanel form = new JPanel(new GridLayout(2, 2, 6, 6));
+        form.add(new JLabel("Brand:"));
+        form.add(brand);
+        form.add(new JLabel("Model:"));
+        form.add(model);
+        if (JOptionPane.showConfirmDialog(this, form, "New " + cat,
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+
+        String b = brand.getText().trim(), m = model.getText().trim();
+        if (b.isEmpty() && m.isEmpty()) return;
+
+        Map<String, String> part = new LinkedHashMap<>();
+        part.put("Brand", b);
+        part.put("Model", m);
+        data.get(cat).add(part);
+
+        DefaultMutableTreeNode catNode = findCatNode(cat);
+        if (catNode != null) {
+            DefaultMutableTreeNode pn = new DefaultMutableTreeNode(label(part));
+            treeModel.insertNodeInto(pn, catNode, catNode.getChildCount());
+            tree.scrollPathToVisible(new TreePath(pn.getPath()));
+        }
+        updateStats();
+    }
+
+    private void clearDetail(String title) {
+        titleLabel.setText(title);
+        fieldsPanel.removeAll();
+        fieldsPanel.revalidate();
+        fieldsPanel.repaint();
+    }
+
+    private void showDetail(Map<String, String> part) {
+        titleLabel.setText(label(part));
+        fieldsPanel.removeAll();
+        fieldsPanel.add(Box.createVerticalStrut(20));
+
+        for (Map.Entry<String, String> f : part.entrySet()) {
+            if (f.getValue().isEmpty()) continue;
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 6));
+            row.setBackground(BG_DARK);
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
+
+            JLabel k = new JLabel(f.getKey() + ":");
+            k.setFont(new Font("SansSerif", Font.PLAIN, 22));
+            k.setForeground(COL_LABEL);
+
+            JLabel v = new JLabel(f.getValue());
+            v.setFont(new Font("SansSerif", Font.PLAIN, 22));
+            v.setForeground(COL_VALUE);
+
+            row.add(k);
+            row.add(v);
+            fieldsPanel.add(row);
+        }
+        fieldsPanel.add(Box.createVerticalGlue());
+        fieldsPanel.revalidate();
+        fieldsPanel.repaint();
+    }
+
+    private String label(Map<String, String> part) {
+        String s = (part.getOrDefault("Brand", "") + " " + part.getOrDefault("Model", "")).trim();
+        return s.isEmpty() ? "(unnamed)" : s;
+    }
+
+    private void updateStats() {
+        int total = data.values().stream().mapToInt(java.util.List::size).sum();
+        StringBuilder sb = new StringBuilder("total components in storage: ");
+        for (int i = 0; i < total; i++) sb.append('\u25A1');
+        statsLabel.setText(sb.toString());
+    }
+
+    private JButton styledBtn(String text, Color fg, int size) {
+        JButton b = new JButton(text);
+        b.setForeground(fg);
+        b.setBackground(BG_PANEL);
+        b.setBorderPainted(false);
+        b.setFocusPainted(false);
+        b.setFont(new Font("SansSerif", Font.BOLD, size));
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        return b;
     }
 }

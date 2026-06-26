@@ -210,10 +210,10 @@ public class MainWindow extends JFrame
         scroll.getViewport ().setBackground (BG_DARK);
         panel.add (scroll, BorderLayout.CENTER);
 
-        imagePanel = new ImagePanel ();
-        imagePanel.setBackground (BG_DARK);
-        imagePanel.setPreferredSize (new Dimension (100, 280));
-        panel.add (imagePanel, BorderLayout.SOUTH);
+        //imagePanel = new ImagePanel ();
+        //imagePanel.setBackground (BG_DARK);
+        //imagePanel.setPreferredSize (new Dimension (100, 280));
+        //panel.add (imagePanel, BorderLayout.SOUTH);
 
         return panel;
     }
@@ -344,7 +344,7 @@ public class MainWindow extends JFrame
         fieldsPanel.removeAll ();
         fieldsPanel.revalidate ();
         fieldsPanel.repaint ();
-        imagePanel.setImage (null);
+        //imagePanel.setImage (null);
     }
 
     private void showDetail (String category, Map<String, String> part)
@@ -376,7 +376,7 @@ public class MainWindow extends JFrame
         fieldsPanel.revalidate ();
         fieldsPanel.repaint ();
 
-        imagePanel.setImage (loadImageFor (category, part));
+        //imagePanel.setImage (loadImageFor (category, part));
     }
 
     private String label (Map<String, String> part)
@@ -388,8 +388,7 @@ public class MainWindow extends JFrame
     private void updateStats ()
     {
         int total = data.values ().stream ().mapToInt (java.util.List::size).sum ();
-        StringBuilder sb = new StringBuilder ("total components in storage: ");
-        for (int i = 0; i < total; i++) sb.append ('\u25A1');
+        StringBuilder sb = new StringBuilder ("total components in storage: " + total);
         statsLabel.setText (sb.toString ());
     }
 
@@ -406,11 +405,13 @@ public class MainWindow extends JFrame
     }
 
     private final Map<String, Image> imageCache = new java.util.HashMap<> ();
-    private ImagePanel imagePanel;
+    // private ImagePanel imagePanel;
     private static final String IMAGES_DIR = "images";
     private static final String FALLBACK_IMAGE = System.getProperty("user.home") + File.separator + "Documents" +
             File.separator + "images" + File.separator + "untitled.png";
 
+    /*
+region ImagePanel
     private static class ImagePanel extends JPanel
     {
         private Image image;
@@ -504,7 +505,7 @@ public class MainWindow extends JFrame
             if (img != null)
                 return img;
         }
-        return tryload (FALLBACK_IMAGE);
+        return tryLoad (FALLBACK_IMAGE);
     }
 
     private Image tryLoad (String path)
@@ -538,28 +539,6 @@ public class MainWindow extends JFrame
                 return v;
         return null;
     }
+endregion
+*/
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
